@@ -34,14 +34,14 @@
     // 请在此处填入您的 DeepSeek API Key。
     // 获取地址: https://platform.deepseek.com/api_keys
     // 您的 Key 应该是 "sk-" 开头的字符串。
-    const DEEPSEEK_API_KEY = "sk-c28a4826c96840cda0429f5f26f8d422"; // <--- 在这里替换成你的 KEY
+    const DEEPSEEK_API_KEY = ""; // <--- 在这里替换成你的 KEY
     const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
     const DEEPSEEK_MODEL = "deepseek-chat";
 
     // --- AI 接口 2 (深度分析) ---
     // 在这里配置第二个AI接口，用于“深度分析”功能。
     // 如果您没有第二个接口，可以将其留空或使用与第一个相同的配置。
-    const AI2_API_KEY = "sk-c28a4826c96840cda0429f5f26f8d422"; // <--- 在这里替换成你的第二个 KEY
+    const AI2_API_KEY = ""; // <--- 在这里替换成你的第二个 KEY
     const AI2_URL = "https://api.deepseek.com/chat/completions"; // <--- 替换成第二个接口的链接
     const AI2_MODEL = "deepseek-reasoner"; // <--- 替换成第二个接口的模型 (例如，更强的模型)
 
@@ -1927,5 +1927,6 @@
     };
 
     // —————————————— 新增功能区 END ——————————————
+
 
 })();
