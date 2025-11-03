@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Bilibili_CC_Subtitles_AISummary
-// @version      2.0 (Refactored)
+// @version      2.4 (Enhanced Logging & Console Control)
 // @description  B站CC字幕AI总结工具。支持DeepSeek，可生成常规总结与深度分析，并可点击总结中的时间戳跳转视频。
 // @author
 // @supportURL
@@ -40,7 +40,22 @@
     const AI2_URL = "https://api.deepseek.com/chat/completions"; // <--- 替换成第二个接口的链接
     const AI2_MODEL = "deepseek-reasoner"; // <--- 替换成第二个接口的模型 (例如，更强的模型)
 
+    // --- 调试设置 ---
+    // 设置为 true 以在浏览器控制台打印详细的调试日志，方便排查问题。
+    const ENABLE_DEBUG_LOGGING = false;
+
     // —————————————— 用户配置区 END ——————————————
+
+
+    /**
+     * @description 调试日志记录器
+     * @param {...any} args - 要打印到控制台的参数
+     */
+    const logDebug = (...args) => {
+        if (ENABLE_DEBUG_LOGGING) {
+            console.log('%c[AI Summary Debug]', 'color: #4CAF50; font-weight: bold;', ...args);
+        }
+    };
 
 
     /**
@@ -144,13 +159,35 @@
          * @returns {Promise<object>} 字幕内容的JSON对象。
          */
         async getSubtitle(lan, name){
-            if(this.datas[lan]) return this.datas[lan];
+            logDebug(`尝试获取字幕内容: 语言=${lan}, 名称=${name}`);
+            if(this.datas[lan]) {
+                logDebug(`字幕内容已在缓存中找到: ${lan}`);
+                return this.datas[lan];
+            }
             const item = this.getSubtitleInfo(lan, name);
-            if(!item) throw('找不到所选语言字幕'+lan);
-            if(this.datas[item.lan]) return this.datas[item.lan];
+            if(!item) {
+                logDebug(`找不到所选语言字幕信息: ${lan}`);
+                throw('找不到所选语言字幕'+lan);
+            }
+            if(this.datas[item.lan]) {
+                logDebug(`字幕内容已在缓存中找到(通过item.lan): ${item.lan}`);
+                return this.datas[item.lan];
+            }
+            logDebug(`正在通过URL请求字幕内容: ${item.subtitle_url}`);
             return fetch(item.subtitle_url)
-                .then(res=>res.json())
-                .then(data=>(this.datas[item.lan] = data));
+                .then(res=>{
+                    logDebug(`字幕内容请求响应状态: ${res.status}, ${res.statusText}`);
+                    return res.json();
+                })
+                .then(data=>{
+                    logDebug('字幕内容原始数据:', data);
+                    this.datas[item.lan] = data;
+                    return data;
+                })
+                .catch(error => {
+                    logDebug(`获取字幕内容失败: ${error}`);
+                    throw error;
+                });
         },
 
         /**
@@ -160,6 +197,7 @@
          * @returns {object|undefined} 匹配的字幕信息对象。
          */
         getSubtitleInfo(lan, name){
+            if (!this.subtitle || !this.subtitle.subtitles) return undefined;
             return this.subtitle.subtitles.find(item=>item.lan==lan || item.lan_doc==name);
         },
 
@@ -190,6 +228,7 @@
          * @returns {number|undefined} 当前视频的CID。
          */
         getEpInfo(){
+            // Existing logic, no change needed for logging here unless detailed tracing of each attempt is desired.
             const bvid = this.getInfo('bvid'),
                   epid = this.getEpid(),
                   cidMap = this.getInfo('cidMap'),
@@ -237,48 +276,78 @@
          * @returns {Promise<object>} 包含字幕列表的Promise。
          */
         async setupData(force){
-            if(this.subtitle && (this.pcid == this.getEpInfo()) && !force) return this.subtitle;
+            logDebug('开始设置字幕数据...');
+            const currentVideoCid = this.getEpInfo();
+            if(this.subtitle && (this.pcid == currentVideoCid) && !force) {
+                logDebug('字幕数据已缓存且CID未改变，无需重新请求API。当前CID:', currentVideoCid);
+                return this.subtitle;
+            }
+            logDebug('检测到视频或字幕可能已切换，或强制刷新。当前CID:', currentVideoCid, '上次CID:', this.pcid);
+
             if(location.pathname=='/blackboard/html5player.html') {
                 let match = location.search.match(/cid=(\d+)/i);
-                if(!match) return;
+                if(!match) {
+                    logDebug('在html5player.html页面未找到cid参数。');
+                    return;
+                }
                 this.window.cid = match[1];
                 match = location.search.match(/aid=(\d+)/i);
                 if(match) this.window.aid = match[1];
                 match = location.search.match(/bvid=(\d+)/i);
                 if(match) this.window.bvid = match[1];
+                logDebug('从html5player.html的URL中解析出CID/AID/BVID。');
             }
-            this.pcid = this.getEpInfo();
-            if((!this.cid&&!this.epid)||(!this.aid&&!this.bvid)) return;
+
+            this.pcid = currentVideoCid; // 更新上次记录的CID
+            if((!this.cid&&!this.epid)||(!this.aid&&!this.bvid)) {
+                logDebug('无法获取CID/EPID/AID/BVID，无法请求字幕API。');
+                return; // 无法获取关键信息，提前退出
+            }
+
             this.subtitle = {count:0,subtitles:[{lan:'close',lan_doc:'关闭'},{lan:'local',lan_doc:'本地字幕'}]};
             if (!force) this.datas = {close:{body:[]},local:{body:[]}};
 
-            return fetch(`https://api.bilibili.com/x/player${this.cid?'/wbi':''}/v2?${this.cid?`cid=${this.cid}`:`&ep_id=${this.epid}`}${this.aid?`&aid=${this.aid}`:`&bvid=${this.bvid}`}`, {credentials: 'include'}).then(res=>{
+            const apiUrl = `https://api.bilibili.com/x/player${this.cid?'/wbi':''}/v2?${this.cid?`cid=${this.cid}`:`&ep_id=${this.epid}`}${this.aid?`&aid=${this.aid}`:`&bvid=${this.bvid}`}`;
+            logDebug('请求字幕配置API URL:', apiUrl);
+
+            return fetch(apiUrl, {credentials: 'include'}).then(res=>{
+                logDebug(`字幕配置API响应状态: ${res.status}, ${res.statusText}`);
                 if (res.status==200) {
                     return res.json().then(ret=>{
+                        logDebug('字幕配置API返回数据:', ret);
                         if (ret.code == -404) {
+                            logDebug('字幕配置API返回404，尝试旧版APP字幕API...');
                             return fetch(`//api.bilibili.com/x/v2/dm/view?${this.aid?`aid=${this.aid}`:`bvid=${this.bvid}`}&oid=${this.cid}&type=1`, {credentials: 'include'}).then(res=>{
-                                return res.json()
+                                logDebug(`旧版APP字幕API响应状态: ${res.status}, ${res.statusText}`);
+                                return res.json();
                             }).then(ret=>{
-                                if (ret.code!=0) throw('无法读取本视频APP字幕配置'+ret.message);
+                                logDebug('旧版APP字幕API返回数据:', ret);
+                                if (ret.code!=0) throw(new Error('无法读取本视频APP字幕配置'+ret.message));
                                 this.subtitle = ret.data && ret.data.subtitle || {subtitles:[]};
                                 this.subtitle.count = this.subtitle.subtitles.length;
                                 this.subtitle.subtitles.forEach(item=>(item.subtitle_url = item.subtitle_url.replace(/https?:\/\//,'//')))
                                 this.subtitle.subtitles.push({lan:'close',lan_doc:'关闭'},{lan:'local',lan_doc:'本地字幕'});
                                 this.subtitle.allow_submit = false;
+                                logDebug('成功通过旧版APP字幕API获取字幕列表:', this.subtitle);
                                 return this.subtitle;
                             });
                         }
-                        if(ret.code!=0||!ret.data||!ret.data.subtitle) throw('读取视频字幕配置错误:'+ret.code+ret.message);
+                        if(ret.code!=0||!ret.data||!ret.data.subtitle) throw(new Error('读取视频字幕配置错误:'+ret.code+ret.message));
                         this.subtitle = ret.data.subtitle;
                         this.subtitle.count = this.subtitle.subtitles.length;
                         this.subtitle.subtitles.push({lan:'close',lan_doc:'关闭'},{lan:'local',lan_doc:'本地字幕'});
+                        logDebug('成功获取字幕列表:', this.subtitle);
                         return this.subtitle;
                     });
                 }
                 else {
-                    throw('请求字幕配置失败:'+res.statusText);
+                    throw(new Error('请求字幕配置失败:'+res.statusText));
                 }
             })
+            .catch(error => {
+                logDebug('请求字幕配置过程中发生错误:', error);
+                throw error; // 重新抛出错误，以便上层调用者捕获
+            });
         }
     };
 
@@ -296,6 +365,7 @@
         getSummaryFromLLM: function(srtText) {
             return new Promise((resolve, reject) => {
                 if (!DEEPSEEK_API_KEY || DEEPSEEK_API_KEY.includes("xxxxxxxx")) {
+                    logDebug("DEEPSEEK_API_KEY 未配置或为默认值，请先设置。");
                     return reject(new Error("请先在脚本中配置你的 DEEPSEEK_API_KEY。"));
                 }
 
@@ -308,25 +378,43 @@
                     stream: false
                 };
 
-                console.log('%c[LLM Log] 准备发送API请求(常规总结)...', 'color: blue; font-weight: bold;');
+                logDebug('准备发送常规总结API请求...');
+                logDebug('请求URL:', DEEPSEEK_URL);
+                logDebug('请求模型:', DEEPSEEK_MODEL);
+                // 掩盖部分API Key进行日志记录，保护隐私
+                const requestHeaders = { "Content-Type": "application/json", "Authorization": `Bearer ${DEEPSEEK_API_KEY.substring(0, 8)}...${DEEPSEEK_API_KEY.substring(DEEPSEEK_API_KEY.length - 4)}` };
+                logDebug('请求Headers:', requestHeaders);
+                logDebug('请求Body:', JSON.stringify(requestBody, null, 2)); // 打印格式化的请求体
+
                 GM_xmlhttpRequest({
                     method: "POST",
                     url: DEEPSEEK_URL,
                     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${DEEPSEEK_API_KEY}` },
                     data: JSON.stringify(requestBody),
                     onload: function(response) {
+                        logDebug('常规总结API响应状态:', response.status, response.statusText);
+                        logDebug('常规总结API原始响应文本:', response.responseText); // 总是打印原始响应文本
                         if (response.status >= 200 && response.status < 300) {
                             try {
-                                resolve(JSON.parse(response.responseText).choices[0].message.content);
+                                const responseJson = JSON.parse(response.responseText);
+                                if (!responseJson.choices || responseJson.choices.length === 0) {
+                                    throw new Error("API返回了空的choices数组。");
+                                }
+                                const summaryContent = responseJson.choices[0].message.content;
+                                logDebug('常规总结API返回的总结内容:', summaryContent);
+                                resolve(summaryContent);
                             } catch (e) {
+                                logDebug('解析常规总结API返回的JSON失败。', e);
                                 reject(new Error("解析API返回的JSON失败: " + e.message));
                             }
                         } else {
-                            let errorMessage = `API 请求失败: ${response.status} - ${response.statusText} - ${response.responseText}`;
-                            reject(new Error(errorMessage));
+                            const errorMessage = `常规总结API 请求失败: ${response.status} - ${response.statusText}`;
+                            logDebug('常规总结API请求失败。详细信息:', { status: response.status, statusText: response.statusText, responseBody: response.responseText });
+                            reject(new Error(`${errorMessage}<br>服务器响应: ${response.responseText}`));
                         }
                     },
                     onerror: function(response) {
+                        logDebug('常规总结API网络请求错误。详细信息:', response);
                         reject(new Error("网络请求错误: " + response.statusText));
                     }
                 });
@@ -341,6 +429,7 @@
         getSummaryFromLLM_AI2: function(srtText) {
             return new Promise((resolve, reject) => {
                 if (!AI2_API_KEY || AI2_API_KEY.includes("xxxxxxxx")) {
+                    logDebug("AI2_API_KEY 未配置或为默认值，请先设置。");
                     return reject(new Error("请先在脚本中配置你的 AI2_API_KEY。"));
                 }
 
@@ -356,25 +445,43 @@
                     stream: false
                 };
 
-                console.log('%c[LLM Log] 准备发送API请求(深度分析)...', 'color: purple; font-weight: bold;');
+                logDebug('准备发送深度分析API请求...');
+                logDebug('请求URL:', AI2_URL);
+                logDebug('请求模型:', AI2_MODEL);
+                // 掩盖部分API Key进行日志记录，保护隐私
+                const requestHeaders = { "Content-Type": "application/json", "Authorization": `Bearer ${AI2_API_KEY.substring(0, 8)}...${AI2_API_KEY.substring(AI2_API_KEY.length - 4)}` };
+                logDebug('请求Headers:', requestHeaders);
+                logDebug('请求Body:', JSON.stringify(requestBody, null, 2)); // 打印格式化的请求体
+
                 GM_xmlhttpRequest({
                     method: "POST",
                     url: AI2_URL,
                     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${AI2_API_KEY}` },
                     data: JSON.stringify(requestBody),
                     onload: function(response) {
+                        logDebug('深度分析API响应状态:', response.status, response.statusText);
+                        logDebug('深度分析API原始响应文本:', response.responseText); // 总是打印原始响应文本
                         if (response.status >= 200 && response.status < 300) {
                             try {
-                                resolve(JSON.parse(response.responseText).choices[0].message.content);
+                                const responseJson = JSON.parse(response.responseText);
+                                if (!responseJson.choices || responseJson.choices.length === 0) {
+                                    throw new Error("API返回了空的choices数组。");
+                                }
+                                const summaryContent = responseJson.choices[0].message.content;
+                                logDebug('深度分析API返回的总结内容:', summaryContent);
+                                resolve(summaryContent);
                             } catch (e) {
+                                logDebug('解析深度分析API返回的JSON失败。', e);
                                 reject(new Error("解析AI2 API返回的JSON失败: " + e.message));
                             }
                         } else {
-                            let errorMessage = `AI2 API 请求失败: ${response.status} - ${response.statusText} - ${response.responseText}`;
-                            reject(new Error(errorMessage));
+                            const errorMessage = `深度分析API 请求失败: ${response.status} - ${response.statusText}`;
+                            logDebug('深度分析API请求失败。详细信息:', { status: response.status, statusText: response.statusText, responseBody: response.responseText });
+                            reject(new Error(`${errorMessage}<br>服务器响应: ${response.responseText}`));
                         }
                     },
                     onerror: function(response) {
+                        logDebug('深度分析API网络请求错误。详细信息:', response);
                         reject(new Error("AI2 API 网络请求错误: " + response.statusText));
                     }
                 });
@@ -398,12 +505,13 @@
         toggleViewButton: null,
 
         // --- State Management ---
-        cache: {}, // 缓存: { 'cid_lan': { standard: "...", deep: "..." } }
+        cache: {}, // 缓存: { 'cid_lan': { standard: "..." or {error:true, message:"..."}, deep: "..." or {error:true, message:"..."} } }
         loadingStates: {}, // 加载状态: { 'cid_lan': { standard: boolean, deep: boolean } }
         currentCid: null,
         currentLan: null,
         currentView: 'standard', // 'standard' 或 'deep'
         isPanelVisible: false,
+        isInitialized: false,
 
         // --- Interaction State ---
         isDragging: false,
@@ -415,25 +523,76 @@
 
         /**
          * 初始化管理器，创建按钮并设置观察者。
+         * 这是脚本的主入口，由 waitForElement 调用。
+         */
+        main: function() {
+            if (this.isInitialized) {
+                logDebug("脚本已初始化，跳过重复初始化。");
+                return;
+            }
+            logDebug("正在初始化脚本核心功能...");
+            this.createButton();
+            this.setupSubtitleObserver();
+            const themeObserver = new MutationObserver(() => this.updateTheme());
+            themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
+            this.isInitialized = true;
+            logDebug("脚本核心功能初始化完成。");
+        },
+
+        /**
+         * 脚本的启动逻辑
+         * 使用 MutationObserver 等待关键的播放器元素出现，以适应B站的动态加载。
          */
         init: function() {
-            window.addEventListener('load', () => {
-                this.createButton();
-                this.setupSubtitleObserver();
-                setTimeout(() => this.setupThemeObserver(), 500);
-            });
+            logDebug("脚本开始启动流程，等待Bilibili播放器元素。");
+            const playerSelectors = [
+                '#bilibili-player', // 主站播放器
+                '#bpx-player-container', // 新版播放器
+                '.player-container', // 番剧页播放器
+                '#player_module' // 课程页播放器
+            ];
+
+            const waitForElement = (selector, callback) => {
+                const element = document.querySelector(selector);
+                if (element) {
+                    logDebug(`播放器元素 "${selector}" 已找到。`);
+                    callback();
+                    return;
+                }
+
+                logDebug(`播放器元素 "${selector}" 未立即找到，启动MutationObserver监听。`);
+                const observer = new MutationObserver((mutations, obs) => {
+                    const element = document.querySelector(selector);
+                    if (element) {
+                        obs.disconnect(); // 找到元素后停止观察
+                        logDebug(`MutationObserver 找到播放器元素 "${selector}"。`);
+                        callback();
+                    }
+                });
+
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true
+                });
+            };
+
+            waitForElement(playerSelectors.join(', '), this.main.bind(this));
         },
 
         /**
          * 创建并显示可拖动的悬浮按钮。
          */
         createButton: function() {
-            if (this.button) return;
+            if (this.button && document.body.contains(this.button)) {
+                logDebug("AI总结悬浮按钮已存在，跳过创建。");
+                return;
+            }
 
             this.button = document.createElement('div');
             this.button.id = 'llm-summary-float-button';
             this.button.innerHTML = 'AI Σ';
-            this.button.title = 'AI 总结当前视频字幕 (可拖动)';
+            this.button.title = 'AI 总结 (单击)\n重置面板位置 (双击)\n可拖动';
 
             const savedPosition = JSON.parse(GM_getValue('summaryButtonPosition', '{"top": "200px", "left": null, "right": "15px"}'));
             this.button.style.cssText = `
@@ -445,7 +604,7 @@
                 border-radius: 50%; display: flex; align-items: center; justify-content: center;
                 font-size: 12px; font-weight: bold; cursor: move; z-index: 2147483647;
                 box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2); transition: transform 0.2s ease, background-color 0.2s ease;
-                user-select: none;
+                user-select: none; white-space: pre;
             `;
 
             this.button.onmouseover = () => { if (!this.isButtonDragging) this.button.style.transform = 'scale(1.1)'; };
@@ -453,6 +612,7 @@
 
             this.button.addEventListener('mousedown', this.startButtonDrag.bind(this));
             this.button.addEventListener('click', (e) => {
+                // 阻止拖动后的点击事件触发面板开关
                 if (e.target.dataset.dragged === 'true') {
                     e.target.dataset.dragged = 'false';
                     return;
@@ -460,7 +620,22 @@
                 this.handleButtonClick();
             });
 
+            // --- 新增功能：双击重置面板位置 ---
+            this.button.addEventListener('dblclick', () => {
+                if (this.panel) {
+                    logDebug("双击悬浮球，重置总结面板位置到网页中心。");
+                    this.panel.style.top = '50%';
+                    this.panel.style.left = '50%';
+                    this.panel.style.transform = 'translate(-50%, -50%)';
+                    // 清除可能因拖动而保存的位置，使其下次打开仍居中（可选，但通常用户希望居中是临时的）
+                    // 或者，如果不希望双击后保存位置，则不需要额外操作，因为拖动时才会GM_setValue
+                } else {
+                    logDebug("总结面板未创建，无法重置位置。");
+                }
+            });
+
             document.body.appendChild(this.button);
+            logDebug("AI总结悬浮按钮创建成功。");
         },
 
         /**
@@ -474,8 +649,12 @@
             ];
             for (const selector of selectors) {
                 const player = document.querySelector(selector);
-                if (player) return player;
+                if (player) {
+                    // logDebug(`找到视频播放器元素: ${selector}`); // 过于频繁，酌情注释
+                    return player;
+                }
             }
+            logDebug("未找到视频播放器元素。");
             return null;
         },
 
@@ -483,7 +662,11 @@
          * 创建总结面板的DOM结构，但不显示。
          */
         createPanel: function() {
-            if (this.panel) return;
+            if (this.panel) {
+                logDebug("AI总结面板已存在，跳过创建。");
+                return;
+            }
+            logDebug("正在创建AI总结面板DOM结构...");
             this.panel = document.createElement('div');
             this.panel.id = 'llm-summary-panel';
             const savedOpacity = GM_getValue('summaryPanelOpacity', 1.0);
@@ -567,12 +750,16 @@
                     event.preventDefault();
                     const videoPlayer = this._getVideoPlayerElement();
                     if (videoPlayer) {
+                        logDebug(`点击时间戳跳转至: ${event.target.dataset.seekTime}秒`);
                         videoPlayer.currentTime = parseFloat(event.target.dataset.seekTime);
                         if (videoPlayer.paused) videoPlayer.play();
+                    } else {
+                        logDebug("未找到视频播放器，无法跳转时间戳。");
                     }
                 }
             });
             this.updateTheme();
+            logDebug("AI总结面板DOM结构创建成功。");
         },
 
         /**
@@ -581,7 +768,6 @@
          * @returns {string} - 转换后的HTML字符串。
          */
         renderSummaryWithClickableTimestamps: function(rawText) {
-            // 添加样式
             if (!document.getElementById('ai-summary-styles')) {
                 const style = document.createElement('style');
                 style.id = 'ai-summary-styles';
@@ -595,6 +781,7 @@
                     }
                 `;
                 document.head.appendChild(style);
+                logDebug("已注入AI总结时间戳样式。");
             }
             const timestampRegex = /\[(\d{2}):(\d{2}):(\d{2})\]/g;
             const renderedHTML = rawText.replace(timestampRegex, (match, h, m, s) => {
@@ -609,12 +796,14 @@
             if (!this.panel) this.createPanel();
             this.panel.style.display = 'flex';
             this.isPanelVisible = true;
+            logDebug("总结面板已显示。");
         },
 
         /** 隐藏总结面板 */
         hidePanel: function() {
             if (this.panel) this.panel.style.display = 'none';
             this.isPanelVisible = false;
+            logDebug("总结面板已隐藏。");
         },
 
         /**
@@ -627,14 +816,15 @@
             }
 
             this.showPanel();
+            logDebug("悬浮按钮点击，尝试加载字幕信息并更新面板。");
             bilibiliCCHelper.setupData().then(() => { // 确保字幕信息已加载
                 const targetSubtitleInfo = this._getTargetSubtitleInfo();
                 this.currentCid = bilibiliCCHelper.cid;
                 this.currentLan = targetSubtitleInfo ? targetSubtitleInfo.lan : null;
-                this.currentView = 'standard';
+                this.currentView = 'standard'; // 默认显示常规总结
                 this.updatePanelContent();
             }).catch(err => {
-                console.error("[AI Summary] Failed to setup subtitle data:", err);
+                console.error("[AI Summary] 获取字幕信息失败:", err);
                 this.contentArea.innerHTML = `获取字幕信息失败: <br>${err.message}`;
             });
         },
@@ -644,6 +834,7 @@
          */
         handleToggleView: function() {
             this.currentView = (this.currentView === 'standard') ? 'deep' : 'standard';
+            logDebug(`视图已切换至: ${this.currentView}`);
             this.updatePanelContent();
         },
 
@@ -651,28 +842,59 @@
          * 根据当前状态（语言、视图、缓存、加载状态）更新面板内容。
          */
         updatePanelContent: function() {
-            if (!this.isPanelVisible) return;
+            if (!this.isPanelVisible) {
+                logDebug("面板不可见，跳过更新内容。");
+                return;
+            }
 
             this.toggleViewButton.textContent = this.currentView === 'standard' ? '深度分析' : '常规总结';
 
             const subtitleInfo = this.currentLan ? bilibiliCCHelper.getSubtitleInfo(this.currentLan) : null;
             this.subtitleDisplay.textContent = subtitleInfo ? `当前字幕: ${subtitleInfo.lan_doc}` : '请选择一个有效字幕';
+            logDebug(`更新面板内容：当前视图=${this.currentView}, 当前字幕=${this.currentLan}`);
 
             if (!this.currentLan) {
                 this.contentArea.innerHTML = '本视频似乎没有可供总结的CC字幕。';
+                logDebug("未找到当前字幕语言，显示无字幕提示。");
                 return;
             }
 
             const cacheKey = `${this.currentCid}_${this.currentLan}`;
             const isLoading = this.loadingStates[cacheKey]?.[this.currentView];
-            const cachedSummary = this.cache[cacheKey]?.[this.currentView];
+            const cachedData = this.cache[cacheKey]?.[this.currentView];
 
             if (isLoading) {
                 const loadingText = this.currentView === 'standard' ? '正在生成总结...' : '正在深度分析...';
                 this.contentArea.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;">${loadingText}</div>`;
-            } else if (cachedSummary) {
-                this.contentArea.innerHTML = this.renderSummaryWithClickableTimestamps(cachedSummary);
+                logDebug(`正在加载 "${this.currentView}" 总结，显示加载动画。`);
+            } else if (cachedData) {
+                if (cachedData.error) {
+                    logDebug(`加载 "${this.currentView}" 总结失败，显示错误信息和重试按钮。`);
+                    this.contentArea.innerHTML = `
+                        <div style="color: #ff6e6e; margin-bottom: 15px; font-family: monospace; font-size: 12px; max-height: 200px; overflow-y: auto;">${cachedData.message}</div>
+                        <button id="ai-summary-retry-button">点击重试</button>
+                    `;
+                    const retryBtn = this.contentArea.querySelector('#ai-summary-retry-button');
+                    if (retryBtn) { // 确保按钮存在
+                        retryBtn.style.cssText = `
+                            padding: 5px 15px; border: 1px solid #00a1d6; color: #00a1d6; background-color: transparent;
+                            border-radius: 4px; cursor: pointer; transition: all 0.2s;
+                        `;
+                        retryBtn.onmouseover = () => { retryBtn.style.backgroundColor = '#00a1d6'; retryBtn.style.color = '#fff'; };
+                        retryBtn.onmouseout = () => { retryBtn.style.backgroundColor = 'transparent'; retryBtn.style.color = '#00a1d6'; };
+                        retryBtn.onclick = () => {
+                            logDebug(`用户点击重试按钮，重试 "${this.currentView}" 总结。`);
+                            // 清除失败的缓存并重新开始流程
+                            delete this.cache[cacheKey][this.currentView];
+                            this.startSummaryProcess(this.currentView, this.currentLan);
+                        };
+                    }
+                } else {
+                    logDebug(`从缓存加载 "${this.currentView}" 总结，并渲染。`);
+                    this.contentArea.innerHTML = this.renderSummaryWithClickableTimestamps(cachedData);
+                }
             } else {
+                logDebug(`缓存中没有 "${this.currentView}" 总结，开始新的总结流程。`);
                 this.startSummaryProcess(this.currentView, this.currentLan);
             }
         },
@@ -688,9 +910,13 @@
 
             if (activeBpxItem) {
                 selectedLanguageIdentifier = activeBpxItem.textContent.trim();
+                logDebug(`检测到Bpx播放器选中字幕: ${selectedLanguageIdentifier}`);
             } else if (activeBuiItem && activeBuiItem.dataset.value) {
                 selectedLanguageIdentifier = activeBuiItem.dataset.value;
                 identifierType = 'lan';
+                logDebug(`检测到Bui播放器选中字幕: ${selectedLanguageIdentifier} (类型: ${identifierType})`);
+            } else {
+                logDebug("未检测到明确选中的字幕。");
             }
 
             if (selectedLanguageIdentifier && selectedLanguageIdentifier !== 'close' && selectedLanguageIdentifier !== 'local') {
@@ -698,12 +924,23 @@
                     identifierType === 'lan' ? selectedLanguageIdentifier : undefined,
                     identifierType === 'lan_doc' ? selectedLanguageIdentifier : undefined
                 );
-                if (info) return info;
+                if (info) {
+                    logDebug(`成功匹配到字幕信息: ${info.lan_doc} (${info.lan})`);
+                    return info;
+                } else {
+                    logDebug(`通过选中项 "${selectedLanguageIdentifier}" 未能匹配到有效字幕信息。`);
+                }
             }
 
             if (bilibiliCCHelper.subtitle && bilibiliCCHelper.subtitle.subtitles) {
-                return bilibiliCCHelper.subtitle.subtitles.find(sub => sub.lan !== 'close' && sub.lan !== 'local');
+                // 尝试获取第一个非"关闭"非"本地"的字幕作为默认
+                const defaultSub = bilibiliCCHelper.subtitle.subtitles.find(sub => sub.lan !== 'close' && sub.lan !== 'local');
+                if (defaultSub) {
+                    logDebug(`作为备用，使用第一个可用字幕: ${defaultSub.lan_doc} (${defaultSub.lan})`);
+                    return defaultSub;
+                }
             }
+            logDebug("未能找到任何可用字幕信息。");
             return null;
         },
 
@@ -716,39 +953,57 @@
             const cacheKey = `${this.currentCid}_${lan}`;
             this.loadingStates[cacheKey] = this.loadingStates[cacheKey] || {};
 
-            if (this.loadingStates[cacheKey][viewType]) return;
+            if (this.loadingStates[cacheKey][viewType]) {
+                logDebug(`"${viewType}" 总结已在进行中，跳过重复请求。`);
+                return;
+            }
 
             this.loadingStates[cacheKey][viewType] = true;
+            // 立即更新UI为加载状态，即便面板当前不可见，以便下次打开时状态正确
             if (this.isPanelVisible && this.currentLan === lan && this.currentView === viewType) {
                  this.updatePanelContent();
             }
 
             const processName = viewType === 'standard' ? '常规总结' : '深度分析';
-            console.log(`%c[AI Summary] --- 开始执行 [${processName}] 流程 for [${lan}] ---`, 'background: #222; color: #bada55');
+            console.log(`%c[AI Summary] --- 开始执行 [${processName}] 流程 for [CID:${this.currentCid}, Lang:${lan}] ---`, 'background: #222; color: #bada55');
 
             try {
-                if (!lan) throw new Error("本视频没有可用的CC字幕。");
+                if (!lan) {
+                    logDebug("没有字幕语言，无法生成总结。");
+                    throw new Error("本视频没有可用的CC字幕。");
+                }
 
+                logDebug(`正在获取字幕数据 for 语言: ${lan}`);
                 const bccData = await bilibiliCCHelper.getSubtitle(lan);
-                if (!bccData || !bccData.body || bccData.body.length === 0) throw new Error('未能获取到有效的字幕内容。');
+                if (!bccData || !bccData.body || bccData.body.length === 0) {
+                    logDebug(`获取到的字幕内容为空或无效 for 语言: ${lan}`);
+                    throw new Error('未能获取到有效的字幕内容。');
+                }
+                logDebug(`成功获取到字幕数据，共 ${bccData.body.length} 条。`);
 
                 const srtContent = subtitleEncoder.encodeToSRT(bccData.body);
+                // logDebug('生成的SRT内容(部分):', srtContent.substring(0, 500) + '...'); // 打印部分SRT内容
+                logDebug(`正在将SRT内容发送给LLM进行 "${processName}" 处理。`);
                 const summary = viewType === 'standard'
                     ? await llmHelper.getSummaryFromLLM(srtContent)
                     : await llmHelper.getSummaryFromLLM_AI2(srtContent);
 
                 this.cache[cacheKey] = this.cache[cacheKey] || {};
-                this.cache[cacheKey][viewType] = summary;
+                this.cache[cacheKey][viewType] = summary; // 成功时缓存字符串
+                logDebug(`"${processName}" 生成成功并已缓存。`);
+
             } catch (error) {
-                console.error(`[AI Summary] ${processName} Error for [${lan}]:`, error);
-                const errorMessage = `${processName}失败：<br><br>${error.message}`;
+                console.error(`%c[AI Summary] ${processName} Error for [CID:${this.currentCid}, Lang:${lan}]:`, 'background: #f00; color: #fff', error);
                 this.cache[cacheKey] = this.cache[cacheKey] || {};
-                this.cache[cacheKey][viewType] = errorMessage;
+                // 失败时缓存一个带标记的错误对象
+                this.cache[cacheKey][viewType] = { error: true, message: `${processName}失败：<br><br>${error.message}` };
             } finally {
                 this.loadingStates[cacheKey][viewType] = false;
-                if (this.isPanelVisible && this.currentLan === lan && this.currentView === viewType) {
+                // 仅当当前面板显示的是这个视频和这种类型的总结时才更新UI
+                if (this.isPanelVisible && this.currentCid === bilibiliCCHelper.cid && this.currentLan === lan && this.currentView === viewType) {
                     this.updatePanelContent();
                 }
+                console.log(`%c[AI Summary] --- [${processName}] 流程结束 for [CID:${this.currentCid}, Lang:${lan}] ---`, 'background: #222; color: #bada55');
             }
         },
 
@@ -756,34 +1011,32 @@
          * 设置一个MutationObserver来监听播放器字幕的切换，并自动刷新总结。
          */
         setupSubtitleObserver: function() {
+            logDebug("设置字幕切换MutationObserver。");
             const observer = new MutationObserver((mutationsList) => {
                 const isSubtitleChange = mutationsList.some(m =>
                     m.type === 'attributes' && m.attributeName === 'class' &&
                     m.target.matches('.bpx-player-ctrl-subtitle-language-item, .bui-select-item, .squirtle-select-item')
                 );
 
-                if (isSubtitleChange && this.isPanelVisible) {
+                if (isSubtitleChange) {
+                    logDebug("检测到字幕UI元素类属性变化，可能发生了字幕切换。");
                     clearTimeout(this.subtitleChangeDebounce);
                     this.subtitleChangeDebounce = setTimeout(() => {
                         const newTargetInfo = this._getTargetSubtitleInfo();
                         if (newTargetInfo && newTargetInfo.lan !== this.currentLan) {
-                            console.log(`[AI Summary] Subtitle changed to ${newTargetInfo.lan}, auto-refreshing.`);
+                            logDebug(`字幕已从 "${this.currentLan}" 切换到 "${newTargetInfo.lan}"，自动刷新总结。`);
                             this.currentLan = newTargetInfo.lan;
-                            this.currentView = 'standard';
-                            this.updatePanelContent();
+                            this.currentView = 'standard'; // 切换字幕后默认显示常规总结
+                            if (this.isPanelVisible) {
+                                this.updatePanelContent();
+                            }
+                        } else if (newTargetInfo) {
+                            logDebug("字幕UI元素变化，但字幕语言未改变，或无有效字幕。");
                         }
-                    }, 500);
+                    }, 500); // 增加少量延迟以避免快速切换的抖动
                 }
             });
             observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['class'] });
-        },
-
-        /**
-         * 设置一个MutationObserver来监听页面主题（深色/浅色模式）变化。
-         */
-        setupThemeObserver: function() {
-            const themeObserver = new MutationObserver(() => this.updateTheme());
-            themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
         },
 
         /**
@@ -792,6 +1045,7 @@
         updateTheme: function() {
             if (!this.panel) return;
             const isDarkMode = document.documentElement.classList.contains('dark');
+            // logDebug(`更新主题样式，当前模式: ${isDarkMode ? '深色' : '浅色'}`); // 过于频繁，酌情注释
             if (isDarkMode) {
                 this.panel.style.backgroundColor = '#242424';
                 this.header.style.backgroundColor = '#303030';
@@ -839,9 +1093,106 @@
     summaryButtonManager.init();
 
     // 暴露一个全局函数，方便从控制台调试
-    unsafeWindow.runBiliSummary = function() {
-        console.log('[AI Summary] runBiliSummary() called from console. Triggering UI...');
-        summaryButtonManager.handleButtonClick();
+    // 重新设计为更结构化的API
+    unsafeWindow.biliAISummary = {
+        /**
+         * 切换AI总结面板的显示/隐藏状态。
+         * 如果面板隐藏，则显示并尝试获取常规总结。
+         */
+        togglePanel: function() {
+            console.log('[AI Summary Console] 调用 togglePanel()。');
+            summaryButtonManager.handleButtonClick();
+        },
+
+        /**
+         * 强制刷新并获取当前视频的常规总结。
+         * 会打开面板并显示结果。
+         */
+        getStandardSummary: async function() {
+            console.log('[AI Summary Console] 调用 getStandardSummary()，强制刷新常规总结。');
+            summaryButtonManager.showPanel(); // 确保面板可见
+            // 确保字幕数据最新
+            try {
+                await bilibiliCCHelper.setupData(true);
+            } catch (err) {
+                console.error('[AI Summary Console] 强制刷新字幕数据失败:', err);
+                summaryButtonManager.contentArea.innerHTML = `手动获取常规总结失败: 字幕数据加载失败。<br>${err.message}`;
+                return;
+            }
+
+            const targetSubtitleInfo = summaryButtonManager._getTargetSubtitleInfo();
+            if (!targetSubtitleInfo) {
+                console.error('[AI Summary Console] 没有找到有效的字幕可供常规总结。');
+                summaryButtonManager.contentArea.innerHTML = '手动获取常规总结失败: 本视频没有可用的CC字幕。';
+                return;
+            }
+            summaryButtonManager.currentCid = bilibiliCCHelper.cid;
+            summaryButtonManager.currentLan = targetSubtitleInfo.lan;
+            summaryButtonManager.currentView = 'standard';
+            // 清除此视图的缓存，强制重新请求
+            if (summaryButtonManager.cache[`${summaryButtonManager.currentCid}_${summaryButtonManager.currentLan}`]) {
+                delete summaryButtonManager.cache[`${summaryButtonManager.currentCid}_${summaryButtonManager.currentLan}`]['standard'];
+            }
+            summaryButtonManager.updatePanelContent(); // 这将触发 startSummaryProcess
+        },
+
+        /**
+         * 强制刷新并获取当前视频的深度分析。
+         * 会打开面板并显示结果。
+         */
+        getDeepSummary: async function() {
+            console.log('[AI Summary Console] 调用 getDeepSummary()，强制刷新深度分析。');
+            summaryButtonManager.showPanel(); // 确保面板可见
+            // 确保字幕数据最新
+            try {
+                await bilibiliCCHelper.setupData(true);
+            } catch (err) {
+                console.error('[AI Summary Console] 强制刷新字幕数据失败:', err);
+                summaryButtonManager.contentArea.innerHTML = `手动获取深度分析失败: 字幕数据加载失败。<br>${err.message}`;
+                return;
+            }
+
+            const targetSubtitleInfo = summaryButtonManager._getTargetSubtitleInfo();
+            if (!targetSubtitleInfo) {
+                console.error('[AI Summary Console] 没有找到有效的字幕可供深度分析。');
+                summaryButtonManager.contentArea.innerHTML = '手动获取深度分析失败: 本视频没有可用的CC字幕。';
+                return;
+            }
+            summaryButtonManager.currentCid = bilibiliCCHelper.cid;
+            summaryButtonManager.currentLan = targetSubtitleInfo.lan;
+            summaryButtonManager.currentView = 'deep';
+            // 清除此视图的缓存，强制重新请求
+            if (summaryButtonManager.cache[`${summaryButtonManager.currentCid}_${summaryButtonManager.currentLan}`]) {
+                delete summaryButtonManager.cache[`${summaryButtonManager.currentCid}_${summaryButtonManager.currentLan}`]['deep'];
+            }
+            summaryButtonManager.updatePanelContent(); // 这将触发 startSummaryProcess
+        },
+
+        /**
+         * 重试当前面板正在显示的总结类型（常规或深度）。
+         * 如果当前有错误信息显示，会清除缓存并重新请求。
+         */
+        retryCurrentSummary: function() {
+            console.log(`[AI Summary Console] 调用 retryCurrentSummary()，重试当前 "${summaryButtonManager.currentView}" 总结。`);
+            if (!summaryButtonManager.currentLan || !summaryButtonManager.currentCid) {
+                console.error('[AI Summary Console] 无法重试: 没有当前视频或字幕上下文。');
+                summaryButtonManager.contentArea.innerHTML = '无法重试: 没有当前视频或字幕上下文。';
+                return;
+            }
+            const cacheKey = `${summaryButtonManager.currentCid}_${summaryButtonManager.currentLan}`;
+            // 仅在缓存中存在对应类型时才清除，防止清除无关缓存
+            if (summaryButtonManager.cache[cacheKey] && summaryButtonManager.cache[cacheKey][summaryButtonManager.currentView]) {
+                delete summaryButtonManager.cache[cacheKey][summaryButtonManager.currentView]; // 清除之前可能失败的缓存
+                console.log(`[AI Summary Console] 已清除当前 "${summaryButtonManager.currentView}" 总结的缓存。`);
+            }
+            summaryButtonManager.startSummaryProcess(summaryButtonManager.currentView, summaryButtonManager.currentLan);
+        },
+
+        // 暴露内部管理器对象，供高级调试使用 (不推荐普通用户直接操作)
+        _manager: summaryButtonManager
     };
+
+    // 保留 runBiliSummary 作为 togglePanel 的简写，以兼容旧习惯
+    unsafeWindow.runBiliSummary = unsafeWindow.biliAISummary.togglePanel;
 
 })();
