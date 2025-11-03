@@ -1,6 +1,5 @@
 # Bilibili CC Subtitles AI Summary (B站CC字幕AI总结)
 
-![Script Screenshot](https://github.com/user-attachments/assets/d7d4a1ef-95d3-42a8-a275-81f54e9226e0)
 
 ---
 
@@ -18,7 +17,7 @@
 ### 🚀 如何使用
 
 1.  **安装脚本管理器**: 浏览器需安装 [Tampermonkey](https://www.tampermonkey.net/) 或类似扩展。
-2.  **安装本脚本**: [点击此处从 GreasyFork 安装](<此处替换为您的GreasyFork链接>)。
+2.  **安装本脚本**: 复制main.js的内容到脚本管理器新建脚本粘贴。
 3.  **配置 API Key (必需)**: 编辑脚本，在 `用户配置区` 填入你的 DeepSeek API Key。
     ```javascript
     // —————————————— 用户配置区 START ——————————————
@@ -29,7 +28,9 @@
 4.  **开始使用**: 打开B站视频页面，点击右侧的 "AI Σ" 悬浮按钮即可。
 
 ---
-
+  
+![Script Screenshot](https://github.com/user-attachments/assets/d7d4a1ef-95d3-42a8-a275-81f54e9226e0)  
+  
 ## English
 
 A UserScript to summarize Bilibili video CC subtitles with one click using AI. Features dual models, custom API endpoints, and local model support.
@@ -44,7 +45,7 @@ A UserScript to summarize Bilibili video CC subtitles with one click using AI. F
 ### 🚀 How to Use
 
 1.  **Install a UserScript Manager**: Your browser needs an extension like [Tampermonkey](https://www.tampermonkey.net/).
-2.  **Install this Script**: [Click here to install from GreasyFork](<REPLACE_WITH_YOUR_GREASYFORK_LINK>).
+2.  **Install this Script**: copy the main.js to your UserScript Manager.
 3.  **Configure API Key (Required)**: Edit the script and enter your DeepSeek API key in the `User Configuration` section.
     ```javascript
     // —————————————— User Configuration Area START ——————————————
