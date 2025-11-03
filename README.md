@@ -18,11 +18,12 @@
 
 1.  **安装脚本管理器**: 浏览器需安装 [Tampermonkey](https://www.tampermonkey.net/) 或类似扩展。
 2.  **安装本脚本**: 复制main.js的内容到脚本管理器新建脚本粘贴。
-3.  **配置 API Key (必需)**: 编辑脚本，在 `用户配置区` 填入你的 DeepSeek API Key。
+3.  **配置 API Key (必需)**: 编辑脚本，在 `用户配置区` 填入你的 API Key。
     ```javascript
     // —————————————— 用户配置区 START ——————————————
-    // 获取地址: https://platform.deepseek.com/api_keys
-    const DEEPSEEK_API_KEY = "sk-xxxxxxxxxx"; // <--- 替换成你的 KEY
+    const DEEPSEEK_API_KEY = "sdaDADgrsfe12325412"; // <--- 在这里替换成你的 KEY
+    const DEEPSEEK_URL = "https://www.wqewqrfwqewqeqw.com/api/open-apis/v1/chat/completions"; //  <--- 在这里替换成你的 请求网址
+    const DEEPSEEK_MODEL = "DeepSeek-V3.1-Fast"; //  <--- 在这里替换成你的 模型
     // —————————————— 用户配置区 END ——————————————
     ```
 4.  **开始使用**: 打开B站视频页面，点击右侧的 "AI Σ" 悬浮按钮即可。
