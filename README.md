@@ -6,6 +6,8 @@
 
 **B站 AI 字幕总结** 是一款基于油猴 (Tampermonkey) 的增强脚本，通过 AI 大模型（如 DeepSeek, OpenAI）将 Bilibili 视频字幕总结为带有时间戳可跳转的总结。  
 
+<img width="727" height="605" alt="image" src="https://github.com/user-attachments/assets/7fa72a0c-d969-4ab0-bf9e-70c53aef1e17" />    
+<img width="850" height="605" alt="image" src="https://github.com/user-attachments/assets/143b2ada-298b-497e-82d7-bcf2bc285b32" />    
 
 
 ---
