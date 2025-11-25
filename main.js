@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Bilibili_CC_Subtitles_AISummary
-// @version      3.4 (DB_Fix/Sub_Selector)
-// @description  B站CC字幕AI总结。
-// @author       Ciender&Gemini3
+// @version      3.7
+// @description  B站CC字幕AI总结 (支持拖拽排序模型、记忆深色模式)
+// @author       Ciender
 // @match        http*://www.bilibili.com/video/*
 // @match        http*://www.bilibili.com/bangumi/play/ss*
 // @match        http*://www.bilibili.com/bangumi/play/ep*
@@ -21,7 +21,7 @@
 // @connect      *
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
     // —————————————— 全局常量与默认设置 ——————————————
@@ -33,24 +33,26 @@
     // 默认预设配置
     const DEFAULT_PRESETS = [
         {
-            id: 'default_standard',
-            name: 'DeepSeek - 常规总结',
-            apiUrl: 'https://api.deepseek.com/chat/completions',
-            apiKey: '',
-            modelName: 'deepseek-chat',
-            systemPrompt: '你是一个视频内容总结助手。用户会提供一个SRT格式的字幕文件内容，请你从中提取核心要点，用详细并且分点完善，先分析场景，然后对于视频核心内容细分总结。分析场景的部分不要发出来。中文进行总结。以markdown形式返回给我。重要：有些观点对于时间戳不一定完全参照我发你的字幕文件，你可以提前或者延后数秒，以确保准确性。对于每个总结要点，请在其开头附上对应的起始时间戳，格式为 [HH:MM:SS]。例如：[00:01:23] 这是一个总结点。请注意[]请顶格生成。每生成一个总结点空一行，提行。请重点关注相关数字、引用等各方方面事实内容，多注重细节。如果有可以列表展示的内容，请务必以列表格式展示。',
+            id: 'gemini-2.5-flash-preview-09-2025',
+            name: 'gemini-2.5-flash-preview-09-2025',
+            apiUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+            apiKey: ' ',
+            modelName: 'gemini-2.5-flash-preview-09-2025',
+            systemPrompt: '你是一个视频内容总结助手。用户会提供一个SRT字幕，请你从中提取核心。简体中文回复。以markdown形式返回给我。重要：有些观点对于时间戳不一定完全参照我发你的字幕文件，你可以提前或者延后数秒，以确保准确性。对于每个总结要点，请在其开头附上对应的起始时间戳，格式为 [HH:MM:SS]。例如：[00:01:23] 这是一个总结点。请注意[]请顶格生成。每生成一个总结点空一行，提行。请重点关注相关数字、引用等各方方面事实内容，多注重细节。有可以列表展示的内容，请务必以列表格式展示。如果有分点分部的地方，以正确缩进返回。',
             temperature: 1.0,
-            top_p: 1.0
+            top_p: 1.0,
+            proxy: ''
         },
         {
-            id: 'default_deep',
-            name: 'DeepSeek - 深度分析',
-            apiUrl: 'https://api.deepseek.com/chat/completions',
-            apiKey: '',
-            modelName: 'deepseek-reasoner',
-            systemPrompt: '你是一个深度思考和分析的视频内容总结助手。用户会提供SRT格式的字幕，请你深入分析其内在逻辑、潜在观点和关键信息，并提供一个结构化、有深度的分析报告。请你先分析字幕场景，结合场景分析，不要输出分析场景的内容。着重字幕中提到有数字、论证材料的地方输出。中文输出。',
+            id: 'default_standard',
+            name: 'DeepSeek - 常规总结',
+            apiUrl: 'https://www.sophnet.com/api/open-apis/v1/chat/completions',
+            apiKey: ' ',
+            modelName: 'DeepSeek-V3.1-Fast',
+            systemPrompt: '你是一个视频内容总结助手。用户会提供一个SRT格式的字幕文件内容，请你从中提取核心要点，用详细并且分点完善，先分析场景，然后对于视频核心内容细分总结。分析场景的部分不要发出来。中文进行总结。以markdown形式返回给我。重要：有些观点对于时间戳不一定完全参照我发你的字幕文件，你可以提前或者延后数秒，以确保准确性。对于每个总结要点，请在其开头附上对应的起始时间戳，格式为 [HH:MM:SS]。例如：[00:01:23] 这是一个总结点。请注意[]请顶格生成。每生成一个总结点空一行，提行。请重点关注相关数字、引用等各方方面事实内容，多注重细节。如果有可以列表展示的内容，请务必以列表格式展示。',
             temperature: 1.0,
-            top_p: 1.0
+            top_p: 1.0,
+            proxy: ''
         }
     ];
 
@@ -82,7 +84,7 @@
         }
     };
 
-    // —————————————— 数据库模块 (IndexedDB) - 已修复事务问题 ——————————————
+    // —————————————— 数据库模块 (IndexedDB) ——————————————
 
     const DBHelper = {
         db: null,
@@ -111,17 +113,13 @@
                     const tx = db.transaction(STORE_NAME, 'readwrite');
                     const store = tx.objectStore(STORE_NAME);
                     const index = store.index('cid_model');
-
-                    // 修复：不使用 setTimeout，在一个事务内完成查询和更新
                     const request = index.get([data.cid, data.modelConfigId]);
 
                     request.onsuccess = (e) => {
                         const existingRecord = e.target.result;
                         if (existingRecord) {
-                            // 如果存在，复用 ID 进行覆盖更新
                             data.id = existingRecord.id;
                         }
-                        // 执行写入
                         const putReq = store.put(data);
                         putReq.onsuccess = () => resolve(true);
                         putReq.onerror = (err) => {
@@ -130,8 +128,6 @@
                         };
                     };
                     request.onerror = (err) => {
-                        Logger.error("DB Get Error:", err);
-                        // 查询失败也尝试直接写入（虽然ID自增可能导致冗余，但保证功能可用）
                         const putReq = store.put(data);
                         putReq.onsuccess = () => resolve(true);
                         putReq.onerror = () => reject(putReq.error);
@@ -139,7 +135,6 @@
                 });
             } catch (e) {
                 Logger.error('Save Summary Fatal Error', e);
-                // 即使DB保存失败，也不要抛出异常阻断UI显示
                 return false;
             }
         },
@@ -157,7 +152,7 @@
             } catch (e) { return null; }
         },
         async clearAll() {
-             try {
+            try {
                 const db = await this.open();
                 return new Promise((resolve, reject) => {
                     const tx = db.transaction(STORE_NAME, 'readwrite');
@@ -229,7 +224,6 @@
         getEpInfo() {
             const w = unsafeWindow;
             let info = w.playerRaw?.getManifest() || w.__INITIAL_STATE__?.epInfo || w.__INITIAL_STATE__?.videoData;
-            // 尝试通过URL参数兜底 (针对内嵌播放器)
             if (!info && location.pathname.includes('html5player')) {
                 const args = new URLSearchParams(location.search);
                 return { cid: args.get('cid'), aid: args.get('aid'), bvid: args.get('bvid') };
@@ -241,7 +235,6 @@
             const info = this.getEpInfo();
             if (!info || !info.cid) throw new Error("无法获取视频CID");
 
-            // 如果切换了视频，清空字幕缓存
             if (this.cid !== info.cid) {
                 this.cachedSubs = {};
             }
@@ -302,7 +295,7 @@
                 stream: false
             };
             return new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
+                const options = {
                     method: "POST", url: config.apiUrl,
                     headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.apiKey}` },
                     data: JSON.stringify(requestBody),
@@ -322,13 +315,17 @@
                             try {
                                 const errJson = JSON.parse(response.responseText);
                                 if (errJson.error && errJson.error.message) errMsg = errJson.error.message;
-                            } catch(e){}
+                            } catch (e) { }
                             reject(new Error(`API Error (${response.status}): ${errMsg}`));
                         }
                     },
                     onerror: (err) => reject(new Error("网络请求失败")),
                     ontimeout: () => reject(new Error("请求超时"))
-                });
+                };
+                if (config.proxy) {
+                    options.proxy = config.proxy;
+                }
+                GM_xmlhttpRequest(options);
             });
         }
     };
@@ -339,24 +336,29 @@
         panel: null,
         settingsModal: null,
         floatBtn: null,
-
-        // State
         currentCid: null,
         lastLoadedSubtitleLan: null,
         isDarkMode: false,
         isLoading: false,
 
         init() {
-            this.isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            // 逻辑更新：优先检查本地存储的设置
+            const savedTheme = GM_getValue('setting_ui_theme', null);
+
+            if (savedTheme !== null) {
+                // 如果用户手动切换过，遵循用户设置
+                this.isDarkMode = savedTheme === 'dark';
+            } else {
+                // 如果没有手动设置，自动跟随浏览器/系统深色模式 (与Chrome统一)
+                this.isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            }
+
             this.createFloatButton();
             this.setupStyle();
-
-            // 启动定时检查器
             this.startStateMonitor();
         },
 
         startStateMonitor() {
-            // 每秒检查一次 CID 变化 (切 P 或切视频)
             setInterval(() => {
                 const ep = BilibiliHelper.getEpInfo();
                 if (ep && ep.cid && ep.cid !== this.currentCid) {
@@ -368,9 +370,7 @@
         },
 
         async resetForNewVideo() {
-            // 视频切换时，重置UI
             if (!this.panel) return;
-
             const contentDiv = document.getElementById('ai-content-area');
             const statusSpan = document.getElementById('ai-status');
             const subSelect = document.getElementById('ai-subtitle-select');
@@ -382,10 +382,9 @@
                 subSelect.disabled = true;
             }
 
-            // 如果面板是开着的，尝试加载字幕列表
             if (this.panel.style.display !== 'none') {
                 await this.loadSubtitleList();
-                this.handleContentLoad(false, true); // 尝试自动加载缓存
+                this.handleContentLoad(false, true);
             }
         },
 
@@ -411,14 +410,13 @@
                 }
                 .ai-dark-mode .ai-header { background: #333 !important; border-bottom-color: #444 !important; }
 
-                /* 工具条 (Model + Subtitle Select) */
+                /* 工具条 */
                 .ai-toolbar {
                     padding: 8px 14px; background: #fff; border-bottom: 1px solid #eee;
                     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
                 }
                 .ai-dark-mode .ai-toolbar { background: #222; border-bottom-color: #444; }
 
-                /* 调整大小手柄 */
                 .ai-resizer {
                     width: 15px; height: 15px; background: transparent;
                     position: absolute; right: 0; bottom: 0; cursor: se-resize; z-index: 10;
@@ -430,7 +428,6 @@
 
                 .ai-controls { display: flex; align-items: center; gap: 6px; cursor: default; }
 
-                /* Select Styles */
                 .ai-select { padding: 4px 6px; border-radius: 4px; border: 1px solid #ddd; font-size: 12px; outline: none; max-width: 140px; }
                 .ai-dark-mode .ai-select { background: #444; color: #eee; border-color: #555; }
 
@@ -441,10 +438,7 @@
 
                 .ai-opacity-slider { width: 60px; height: 4px; cursor: pointer; }
 
-                /* 内容区域 */
                 .ai-content { flex: 1; overflow-y: auto; padding: 16px; font-size: 14px; line-height: 1.6; position: relative; }
-
-                /* Markdown 样式 */
                 .ai-content .markdown-body { font-family: inherit; color: inherit; text-align: left !important; }
                 .ai-content .markdown-body h1, .ai-content .markdown-body h2, .ai-content .markdown-body h3 {
                     margin-top: 16px !important; margin-bottom: 8px !important; font-weight: bold !important; line-height: 1.4 !important; color: #00a1d6;
@@ -454,7 +448,7 @@
                 .ai-content .markdown-body ul, .ai-content .markdown-body ol { list-style-type: inherit !important; padding-left: 24px !important; margin-bottom: 12px !important; }
                 .ai-content .markdown-body strong { font-weight: bold !important; color: #fb7299; }
                 .ai-content a { color: #00a1d6; text-decoration: none; font-weight: bold; cursor: pointer; }
-                .ai-content a:hover { text-decoration: underline; background: rgba(0, 161, 214, 0.1); border-radius: 4px; }
+                .ai-content a:hover { text-decoration: none; background: #00a1d6; border-radius: 3px; }
 
                 /* Settings Modal */
                 .ai-modal-overlay {
@@ -478,10 +472,26 @@
 
                 .ai-settings-list { width: 200px; border-right: 1px solid #eee; overflow-y: auto; background: #f5f5f5; }
                 .ai-dark-mode .ai-settings-list { background: #222; border-right-color: #444; }
-                .ai-config-item { padding: 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #eaeaea; color: #333; }
+
+                /* Config Item & Dragging */
+                .ai-config-item {
+                    padding: 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #eaeaea; color: #333;
+                    display: flex; align-items: center; gap: 8px; /* For drag handle layout */
+                }
                 .ai-dark-mode .ai-config-item { border-bottom-color: #444; color: #eee; }
                 .ai-config-item:hover, .ai-config-item.active { background: #e6f7ff; color: #00a1d6; }
                 .ai-dark-mode .ai-config-item:hover, .ai-dark-mode .ai-config-item.active { background: #333; }
+
+                .ai-drag-handle {
+                    cursor: grab; color: #999; padding: 0 2px; font-weight: bold; font-size: 16px; user-select: none;
+                    display: flex; align-items: center;
+                }
+                .ai-drag-handle:hover { color: #666; }
+                .ai-dark-mode .ai-drag-handle { color: #777; }
+
+                /* Dragging visual states */
+                .ai-config-item.dragging { opacity: 0.5; background: #e6f7ff; }
+                .ai-config-item.drag-over { border-top: 2px solid #00a1d6; }
 
                 .ai-config-section-title { font-size: 12px; font-weight: bold; padding: 8px 12px; color: #999; background: #eee; }
                 .ai-dark-mode .ai-config-section-title { background: #333; color: #777; }
@@ -497,7 +507,6 @@
                 .ai-btn-primary { background: #00a1d6; color: #fff; }
                 .ai-btn-danger { background: #ff4d4f; color: #fff; }
 
-                /* Checkbox */
                 .ai-checkbox-wrapper { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 
                 .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 2s linear infinite; margin: 0 auto 10px; }
@@ -568,11 +577,7 @@
             if (!this.panel) this.createPanel();
             this.panel.style.display = 'flex';
             this.updateModelSelect();
-
-            // 首次打开或重新打开，确保字幕列表是最新的
             await this.loadSubtitleList();
-
-            // 尝试加载内容
             this.handleContentLoad(false, true);
         },
 
@@ -590,7 +595,6 @@
             header.className = 'ai-header';
             header.innerHTML = '<div style="display:flex;align-items:center;"><b>AI 字幕总结</b> <span id="ai-status" style="font-size:12px;color:#999;margin-left:8px"></span></div>';
 
-            // 拖拽
             let isDragging = false;
             header.onmousedown = (e) => {
                 if (e.target.closest('.ai-controls') || e.target.closest('select') || e.target.tagName === 'INPUT') return;
@@ -614,17 +618,15 @@
             opacitySlider.oninput = (e) => { this.panel.style.opacity = e.target.value; };
 
             const btnTheme = this.createIconBtn(this.isDarkMode ? '🌙' : '☀️', '切换深色/浅色模式', () => this.toggleTheme(btnTheme));
-            // 刷新按钮
             const btnRefresh = this.createIconBtn('🔄', '重新生成 (强制更新)', () => this.handleContentLoad(true, false));
             btnRefresh.id = 'ai-btn-refresh';
-
             const btnSettings = this.createIconBtn('⚙️', '设置', () => this.openSettings());
             const btnClose = this.createIconBtn('✕', '关闭', () => this.panel.style.display = 'none');
 
             controls.append(opacitySlider, btnTheme, btnRefresh, btnSettings, btnClose);
             header.appendChild(controls);
 
-            // Toolbar (Subtitle Select & Model Select)
+            // Toolbar
             const toolbar = document.createElement('div');
             toolbar.className = 'ai-toolbar';
 
@@ -637,7 +639,7 @@
             subSelect.className = 'ai-select'; subSelect.id = 'ai-subtitle-select';
             subSelect.title = '选择字幕语言';
             subSelect.innerHTML = '<option value="">检测中...</option>';
-            subSelect.onchange = () => this.handleContentLoad(false, true); // 切换字幕语言触发检查缓存
+            subSelect.onchange = () => this.handleContentLoad(false, true);
 
             toolbar.innerHTML = '<span style="font-size:12px;color:#888;">字幕:</span>';
             toolbar.appendChild(subSelect);
@@ -673,7 +675,6 @@
             document.body.appendChild(this.panel);
             if (this.isDarkMode) this.panel.classList.add('ai-dark-mode');
 
-            // 重新绑定事件（因为innerHTML清除了引用）
             this.panel.querySelector('#ai-model-select').onchange = () => this.handleContentLoad(false, true);
             this.panel.querySelector('#ai-subtitle-select').onchange = () => this.handleContentLoad(false, true);
         },
@@ -688,6 +689,9 @@
             this.isDarkMode = !this.isDarkMode;
             if (this.isDarkMode) { this.panel.classList.add('ai-dark-mode'); btn.textContent = '🌙'; }
             else { this.panel.classList.remove('ai-dark-mode'); btn.textContent = '☀️'; }
+
+            // 逻辑更新：保存用户偏好设置
+            GM_setValue('setting_ui_theme', this.isDarkMode ? 'dark' : 'light');
         },
 
         updateModelSelect() {
@@ -701,7 +705,12 @@
                 opt.value = cfg.id; opt.textContent = cfg.name;
                 select.appendChild(opt);
             });
-            if (currentVal && configs.find(c => c.id === currentVal)) select.value = currentVal;
+            // 默认选第一个（即默认模型），或者保持之前选中的
+            if (currentVal && configs.find(c => c.id === currentVal)) {
+                select.value = currentVal;
+            } else if (configs.length > 0) {
+                select.value = configs[0].id;
+            }
         },
 
         async loadSubtitleList() {
@@ -710,7 +719,7 @@
 
             try {
                 const info = await BilibiliHelper.fetchSubtitleList();
-                this.currentCid = BilibiliHelper.cid; // 确保CID同步
+                this.currentCid = BilibiliHelper.cid;
                 const subs = info.subtitles || [];
 
                 select.innerHTML = '';
@@ -727,14 +736,12 @@
                     const opt = document.createElement('option');
                     opt.value = sub.lan;
                     opt.textContent = sub.lan_doc;
-                    // 默认尝试选中中文或第一个
                     if (sub.lan.startsWith('zh') && !select.value) {
                         opt.selected = true;
                     }
                     select.appendChild(opt);
                 });
 
-                // 如果没有中文，默认选第一个
                 if (!select.value && subs.length > 0) {
                     select.value = subs[0].lan;
                 }
@@ -745,7 +752,6 @@
             }
         },
 
-        // isAutoLoad: true = 只是切换了视频或打开面板，不要自动开始跑API，只读缓存
         async handleContentLoad(forceRefresh, isAutoLoad = false) {
             if (this.isLoading) return;
 
@@ -759,7 +765,6 @@
             const subLan = subSelect ? subSelect.value : null;
 
             if (!configId) return;
-            // 如果没有字幕（subLan为空），且不是在初始化阶段
             if (subSelect && !subSelect.disabled && !subLan) {
                 contentDiv.innerHTML = '<div style="text-align:center;padding:20px;color:#999">该视频无字幕，无法生成总结。</div>';
                 return;
@@ -771,22 +776,15 @@
             try {
                 statusSpan.textContent = '检查缓存...';
 
-                // 1. 检查缓存
-                // 注意：目前的缓存Key是 CID + Model。
-                // 如果用户切换了字幕语言，我们通过比较缓存中的 subtitleLabel/lan 来决定是否可用
-                // 如果不匹配，则视为无缓存。
                 if (!forceRefresh) {
                     const cached = await DBHelper.getSummary(this.currentCid, config.id);
                     if (cached) {
-                        // 获取当前选中的语言Label以便对比
                         const selectedOption = subSelect.options[subSelect.selectedIndex];
                         const selectedLabel = selectedOption ? selectedOption.text : '';
 
-                        // 简单判断：如果缓存记录了SubtitleLabel且不包含当前选择的Label (例如 缓存是中文，当前选英文)
-                        // 则认为缓存不匹配。注意：旧版缓存可能没有 subtitleLabel 字段，兼容处理。
                         let isMatch = true;
                         if (cached.subtitleLabel && selectedLabel && !selectedLabel.includes(cached.subtitleLabel) && !cached.subtitleLabel.includes(selectedLabel)) {
-                             isMatch = false; // 语言不通
+                            isMatch = false;
                         }
 
                         if (isMatch) {
@@ -798,7 +796,6 @@
                     }
                 }
 
-                // 2. 无缓存或强制刷新 -> 准备请求
                 if (isAutoLoad) {
                     statusSpan.textContent = '待机';
                     contentDiv.innerHTML = `
@@ -815,7 +812,6 @@
                     return;
                 }
 
-                // 3. 开始执行
                 this.isLoading = true;
                 if (refreshBtn) refreshBtn.classList.add('disabled');
 
@@ -834,11 +830,9 @@
                 const summary = await LLMHelper.sendRequest(config, srtText);
                 Logger.info("Summary Received");
 
-                // 4. 先渲染UI，保证用户看到结果 (Critical Fix)
                 statusSpan.textContent = '完成';
                 this.renderMarkdown(summary);
 
-                // 5. 后台存入数据库
                 Logger.info("Saving to DB...");
                 DBHelper.saveSummary({
                     cid: this.currentCid,
@@ -871,13 +865,12 @@
             const contentDiv = document.getElementById('ai-content-area');
             if (typeof marked !== 'undefined') {
                 let rawHtml = marked.parse(text);
-                // 时间戳链接 [00:00:00] 或 [00:00]
                 rawHtml = rawHtml.replace(/\[(\d{1,2}):(\d{1,2}):(\d{1,2})\]/g, (match, h, m, s) => {
-                    const seconds = parseInt(h)*3600 + parseInt(m)*60 + parseInt(s);
+                    const seconds = parseInt(h) * 3600 + parseInt(m) * 60 + parseInt(s);
                     return `<a data-time="${seconds}">${match}</a>`;
                 }).replace(/\[(\d{1,2}):(\d{1,2})\]/g, (match, m, s) => {
-                     const seconds = parseInt(m)*60 + parseInt(s);
-                     return `<a data-time="${seconds}">${match}</a>`;
+                    const seconds = parseInt(m) * 60 + parseInt(s);
+                    return `<a data-time="${seconds}">${match}</a>`;
                 });
                 contentDiv.innerHTML = `<div class="markdown-body">${rawHtml}</div>`;
             } else {
@@ -894,17 +887,16 @@
         openSettings() {
             if (this.settingsModal) {
                 this.settingsModal.style.display = 'flex';
+                this.renderSettingsList(); // 重新渲染以确保顺序正确
                 return;
             }
 
             const overlay = document.createElement('div');
             overlay.className = 'ai-modal-overlay';
-            // 移除 overlay 点击关闭，防止误触
 
             const box = document.createElement('div');
             box.className = 'ai-settings-box';
 
-            // 关闭按钮 (X)
             const closeBtn = document.createElement('button');
             closeBtn.className = 'ai-settings-close';
             closeBtn.innerHTML = '✕';
@@ -915,7 +907,6 @@
             const listCol = document.createElement('div');
             listCol.className = 'ai-settings-list';
 
-            // 菜单项容器
             const listContainer = document.createElement('div');
             listContainer.id = 'ai-settings-list-container';
             listCol.appendChild(listContainer);
@@ -931,19 +922,19 @@
             document.body.appendChild(overlay);
 
             this.renderSettingsList();
-            // 默认打开全局设置
             this.loadGlobalSettings();
         },
 
         renderSettingsList() {
             const container = document.getElementById('ai-settings-list-container');
+            if (!container) return;
             container.innerHTML = '';
 
             // 1. 全局设置入口
             const globalItem = document.createElement('div');
             globalItem.className = 'ai-config-item';
-            globalItem.textContent = '🛠️ 全局设置';
-            globalItem.onclick = () => {
+            globalItem.innerHTML = '<span>🛠️ 全局设置</span>';
+            globalItem.onclick = (e) => {
                 this.setActiveItem(globalItem);
                 this.loadGlobalSettings();
             };
@@ -952,13 +943,14 @@
             // 分割线/标题
             const sectionTitle = document.createElement('div');
             sectionTitle.className = 'ai-config-section-title';
-            sectionTitle.textContent = '模型配置';
+            sectionTitle.textContent = '模型配置 (拖拽排序)';
             container.appendChild(sectionTitle);
 
             // 2. 新建配置入口
             const addBtn = document.createElement('div');
             addBtn.className = 'ai-config-item';
             addBtn.style.textAlign = 'center'; addBtn.style.fontWeight = 'bold';
+            addBtn.style.justifyContent = 'center';
             addBtn.textContent = '+ 新建模型';
             addBtn.onclick = () => {
                 this.setActiveItem(addBtn);
@@ -966,16 +958,97 @@
             };
             container.appendChild(addBtn);
 
-            // 3. 现有配置列表
+            // 3. 现有配置列表 (可拖拽)
             const configs = ConfigManager.getAll();
-            configs.forEach(cfg => {
+
+            configs.forEach((cfg, index) => {
                 const div = document.createElement('div');
                 div.className = 'ai-config-item';
-                div.textContent = cfg.name;
-                div.onclick = () => {
+                div.setAttribute('data-id', cfg.id);
+                div.setAttribute('data-index', index);
+
+                // 拖拽手柄
+                const handle = document.createElement('span');
+                handle.className = 'ai-drag-handle';
+                handle.textContent = '≡';
+                handle.title = '拖拽排序';
+
+                // 名称
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = cfg.name;
+                nameSpan.style.flex = '1';
+
+                div.append(handle, nameSpan);
+
+                // 点击选择逻辑 (避免拖拽时触发)
+                div.onclick = (e) => {
+                    // 如果点击的是手柄，不触发编辑
+                    if (e.target.classList.contains('ai-drag-handle')) return;
                     this.setActiveItem(div);
                     this.loadModelForm(cfg.id);
                 };
+
+                // --- 拖拽逻辑 ---
+                div.draggable = true;
+
+                div.ondragstart = (e) => {
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', index); // 传输当前的索引
+                    div.classList.add('dragging');
+                };
+
+                div.ondragover = (e) => {
+                    e.preventDefault(); // 允许放置
+                    e.dataTransfer.dropEffect = 'move';
+                    const target = e.target.closest('.ai-config-item[draggable="true"]');
+                    if (target && target !== div) {
+                        target.classList.add('drag-over');
+                    }
+                };
+
+                div.ondragleave = (e) => {
+                    const target = e.target.closest('.ai-config-item[draggable="true"]');
+                    if (target) {
+                        target.classList.remove('drag-over');
+                    }
+                };
+
+                div.ondrop = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+                    const targetDiv = e.target.closest('.ai-config-item[draggable="true"]');
+
+                    // 清理样式
+                    document.querySelectorAll('.ai-config-item').forEach(el => {
+                        el.classList.remove('dragging');
+                        el.classList.remove('drag-over');
+                    });
+
+                    if (targetDiv) {
+                        const toIndex = parseInt(targetDiv.getAttribute('data-index'));
+
+                        if (fromIndex !== toIndex && !isNaN(fromIndex) && !isNaN(toIndex)) {
+                            // 重新排序数据
+                            const list = ConfigManager.getAll();
+                            const [movedItem] = list.splice(fromIndex, 1);
+                            list.splice(toIndex, 0, movedItem);
+                            ConfigManager.save(list);
+
+                            // 刷新列表和主下拉框
+                            this.renderSettingsList();
+                            this.updateModelSelect();
+                        }
+                    }
+                };
+
+                div.ondragend = () => {
+                     document.querySelectorAll('.ai-config-item').forEach(el => {
+                        el.classList.remove('dragging');
+                        el.classList.remove('drag-over');
+                    });
+                };
+
                 container.appendChild(div);
             });
         },
@@ -1013,7 +1086,6 @@
                 </div>
             `;
 
-            // 绑定事件
             document.getElementById('ai-debug-toggle').onchange = (e) => {
                 GlobalSettings.debug = e.target.checked;
                 Logger.info("Debug mode changed to:", e.target.checked);
@@ -1037,11 +1109,11 @@
             const isNew = !id;
             const data = isNew ? {
                 id: crypto.randomUUID(), name: '新模型配置', apiUrl: 'https://', apiKey: '', modelName: '',
-                systemPrompt: '你是一个AI助手...', temperature: 1.0, top_p: 1.0
+                systemPrompt: '你是一个AI助手...', temperature: 1.0, top_p: 1.0, proxy: ''
             } : ConfigManager.getById(id);
 
             formContainer.innerHTML = `
-                <h3 style="margin-top:0; border-bottom:1px solid #eee; padding-bottom:10px;">${isNew?'新建模型配置':'编辑配置'}</h3>
+                <h3 style="margin-top:0; border-bottom:1px solid #eee; padding-bottom:10px;">${isNew ? '新建模型配置' : '编辑配置'}</h3>
                 <div class="ai-form-group"><label class="ai-form-label">配置名称</label><input class="ai-form-input" id="cfg-name" value="${data.name}"></div>
                 <div class="ai-form-group"><label class="ai-form-label">API URL</label><input class="ai-form-input" id="cfg-url" value="${data.apiUrl}"></div>
                 <div class="ai-form-group"><label class="ai-form-label">API Key</label><input class="ai-form-input" type="password" id="cfg-key" value="${data.apiKey}"></div>
@@ -1051,6 +1123,7 @@
                     <div class="ai-form-group" style="flex:1"><label class="ai-form-label">Temp</label><input class="ai-form-input" type="number" step="0.1" id="cfg-temp" value="${data.temperature}"></div>
                     <div class="ai-form-group" style="flex:1"><label class="ai-form-label">Top_P</label><input class="ai-form-input" type="number" step="0.1" id="cfg-topp" value="${data.top_p}"></div>
                 </div>
+                <div class="ai-form-group"><label class="ai-form-label">Proxy (可选)</label><input class="ai-form-input" id="cfg-proxy" value="${data.proxy || ''}" placeholder="默认为空"></div>
                 <div style="margin-top:20px; display:flex; gap:10px; justify-content:flex-end">
                     ${!isNew ? `<button class="ai-btn ai-btn-danger" id="btn-del">删除</button>` : ''}
                     <button class="ai-btn ai-btn-primary" id="btn-save">保存</button>
@@ -1066,7 +1139,8 @@
                     modelName: document.getElementById('cfg-model').value,
                     systemPrompt: document.getElementById('cfg-prompt').value,
                     temperature: parseFloat(document.getElementById('cfg-temp').value),
-                    top_p: parseFloat(document.getElementById('cfg-topp').value)
+                    top_p: parseFloat(document.getElementById('cfg-topp').value),
+                    proxy: document.getElementById('cfg-proxy').value
                 };
                 if (isNew) ConfigManager.add(newConfig); else ConfigManager.update(newConfig);
                 this.renderSettingsList(); this.updateModelSelect();
@@ -1078,7 +1152,7 @@
                     if (confirm('删除此配置？')) {
                         ConfigManager.remove(data.id);
                         this.renderSettingsList(); this.updateModelSelect();
-                        this.loadGlobalSettings(); // 删除后返回全局页
+                        this.loadGlobalSettings();
                     }
                 };
             }
