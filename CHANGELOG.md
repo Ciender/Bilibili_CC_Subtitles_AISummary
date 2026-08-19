@@ -6,11 +6,10 @@
 
 ### Added / 新增
 
-- 中英文 README，覆盖安装、快速使用、模型配置、代理、联网搜索、隐私和故障排查。
-- 使用真实 Bilibili CC 字幕页面重新截取浅色、深色、NT4、设置、来源列表和引用悬浮卡片截图。
+- 重构中英文 README，改为面向用户的安装、使用和配置向导。
+- 截图改为插件本体：Light 主界面、引用悬浮卡片和 API Key 遮罩后的当前设置页。
 - 删除旧版 `Old_Version.js`，主页仅保留当前 `main.js`。
-- 三种 API 格式说明：OpenAI Chat Completions、OpenAI Responses、Gemini 原生 `generateContent`。
-- 连接测试和测试报告说明，包含 HTTP 状态码、响应类型和截断后的原始响应。
+- 默认总结 Prompt 更新为 2026 年 8 月中文 Markdown 总结格式。
 
 ### Documented / 已记录功能
 
