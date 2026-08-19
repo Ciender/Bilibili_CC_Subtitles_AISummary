@@ -7,7 +7,8 @@
 ### Added / 新增
 
 - 中英文 README，覆盖安装、快速使用、模型配置、代理、联网搜索、隐私和故障排查。
-- 本地界面截图：总结面板和模型设置页。
+- 使用真实 Bilibili CC 字幕页面重新截取浅色、深色、NT4、设置、来源列表和引用悬浮卡片截图。
+- 删除旧版 `Old_Version.js`，主页仅保留当前 `main.js`。
 - 三种 API 格式说明：OpenAI Chat Completions、OpenAI Responses、Gemini 原生 `generateContent`。
 - 连接测试和测试报告说明，包含 HTTP 状态码、响应类型和截断后的原始响应。
 
@@ -19,6 +20,7 @@
 - 使用 IndexedDB（`BiliAISummaryDB`）缓存视频总结；支持按模型和字幕语言区分缓存。
 - 模型配置支持自定义 System Prompt、Temperature、Top P、思考强度、最大输出 Token、附加 JSON 参数和代理。
 - 全局设置支持时间轴标题深度、Debug 日志和清空缓存。
+- 默认视频总结 Prompt 统一为 2026 年 8 月版本：要求分段、总结、表格、专家评价、时间区间/重要时间点，并在需要时联网搜索权威来源。
 
 ### Compatibility / 兼容性说明
 
