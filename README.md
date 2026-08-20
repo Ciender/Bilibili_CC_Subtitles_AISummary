@@ -5,21 +5,17 @@
 ![Version](https://img.shields.io/badge/version-4.2.2-00a1d6.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-## 预览
-
-真实 Bilibili CC 字幕生成的 Light 界面，截图只保留插件本体：
+## UI
 
 ![Light UI](docs/screenshots/ui-light.png)
-
-## 使用细节
 
 总结正文中的时间点可以点击跳转。带来源的 `[1]`、`[2]` 等标记支持鼠标悬浮查看标题、链接和引用片段。
 
 ![Citation hover](docs/screenshots/citation-hover.png)
 
-设置页使用当前 Light UI，API Key 仅以圆点显示：
-
 ![Settings / 设置（API Key 已遮罩）](docs/screenshots/settings.png)
+
+
 
 ## 安装
 
